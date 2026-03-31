@@ -76,8 +76,11 @@ while True:
 ## 安装
 
 ```bash
-# 克隆或复制到项目目录
-pip install aiohttp
+# 使用 uv (推荐)
+uv sync
+
+# 或使用 pip
+pip install aiohttp pypdf
 ```
 
 ## 使用方法
@@ -85,13 +88,29 @@ pip install aiohttp
 ### CLI 方式
 
 ```bash
-# 设置 API Key
-export OPENAI_API_KEY=your-key
+# 使用 uv run 启动
+uv run main.py "帮我分析这个项目"
+uv run main.py --agent plan "制定重构计划"
+uv run main.py --model gpt-4 --verbose "搜索代码"
 
-# 运行
-python -m nano_opencode "帮我分析这个项目"
-python -m nano_opencode --agent plan "制定重构计划"
-python -m nano_opencode --model gpt-4 --verbose "搜索代码"
+# 使用 Ollama
+uv run main.py --provider ollama "帮我分析这个项目"
+uv run main.py -p ollama -m qwen2.5:7b "搜索代码"
+```
+
+### 交互模式
+
+```bash
+# 启动交互模式
+uv run main.py -i
+uv run main.py -i --provider ollama
+
+# 交互模式命令
+>>> /help           # 显示帮助
+>>> /clear          # 清除会话历史
+>>> /agent plan     # 切换 Agent
+>>> /model qwen2.5  # 切换模型
+>>> exit            # 退出
 ```
 
 ### 编程方式
@@ -139,16 +158,25 @@ result = await runner.run(
 
 ```
 nano-opencode/
-├── __init__.py      # 包入口
-├── __main__.py      # CLI 入口
-├── agent.py         # Agent 定义
-├── tools.py         # 工具系统
-├── permission.py    # 权限系统
-├── session.py       # 会话管理
-├── llm.py           # LLM 客户端
-├── loop.py          # Agent 循环
-├── examples.py      # 使用示例
-└── README.md        # 文档
+├── __init__.py        # 包入口
+├── __main__.py        # CLI 入口
+├── main.py            # 主程序入口
+├── agent.py           # Agent 定义
+├── tools.py           # 工具系统
+├── permission.py      # 权限系统
+├── session.py         # 会话管理
+├── llm.py             # LLM 客户端 (支持 OpenAI/Anthropic/Ollama)
+├── loop.py            # Agent 循环
+├── stream.py          # 流式处理
+├── message.py         # 消息模型 (Part 系统)
+├── error.py           # 错误处理
+├── compaction.py      # 上下文压缩
+├── task_tool.py       # 子 Agent 调用
+├── prompt_manager.py  # 提示词管理
+├── prompt/            # 提示词目录
+├── examples.py        # 使用示例
+├── pyproject.toml     # 项目配置
+└── README.md          # 文档
 ```
 
 ## 内置 Agent
@@ -157,8 +185,31 @@ nano-opencode/
 |-------|------|------|
 | `build` | primary | 默认 Agent，拥有所有权限 |
 | `plan` | primary | 计划模式，禁止编辑 |
-| `general` | subagent | 通用子 Agent |
+| `general` | subagent | 通用子 Agent，研究复杂问题 |
 | `explore` | subagent | 代码探索，只读 |
+| `analyze` | subagent | 数据分析，处理文档和研报 |
+
+## LLM 提供商
+
+| 提供商 | 参数 | 说明 |
+|--------|------|------|
+| OpenAI | `--provider openai` | 默认，需要 OPENAI_API_KEY |
+| Anthropic | `--provider anthropic` | 需要 ANTHROPIC_API_KEY |
+| Ollama | `--provider ollama` | 本地运行，无需 API Key |
+
+### Ollama 配置
+
+```bash
+# 启动 Ollama 服务
+ollama serve
+
+# 拉取模型
+ollama pull glm-4.7-flash
+
+# 使用
+uv run main.py --provider ollama "你的问题"
+uv run main.py -p ollama -m qwen2.5:7b "你的问题"
+```
 
 ## 内置工具
 
@@ -170,6 +221,7 @@ nano-opencode/
 | `glob` | 文件搜索 |
 | `grep` | 内容搜索 |
 | `bash` | Shell 执行 |
+| `pdf` | 读取 PDF 文件 |
 | `task` | 子 Agent 调用 |
 
 ## 与 OpenCode 的对应关系

@@ -219,7 +219,8 @@ class TaskTool(Tool):
         if context.extra and context.extra.get("bypass_agent_check"):
             pass
         else:
-            rules = context.agent.permission_rules if context.agent else []
+            agent_config = agent_registry.get(context.agent) if context.agent else None
+            rules = agent_config.permission_rules if agent_config else []
             evaluator = PermissionEvaluator(rules)
             permission_result = evaluator.evaluate(
                 permission="task",
@@ -447,7 +448,46 @@ def create_general_agent() -> AgentConfig:
     )
 
 
+def create_analyze_agent() -> AgentConfig:
+    """创建分析子 Agent"""
+    from permission import PermissionRule, PermissionAction
+    
+    return AgentConfig(
+        name="analyze",
+        description="数据分析 Agent，用于分析文档、研报、数据文件等。擅长提取关键信息、总结分析和生成报告。",
+        mode=AgentMode.SUBAGENT,
+        permission_rules=[
+            PermissionRule(permission="read", pattern="*", action=PermissionAction.ALLOW),
+            PermissionRule(permission="glob", pattern="*", action=PermissionAction.ALLOW),
+            PermissionRule(permission="grep", pattern="*", action=PermissionAction.ALLOW),
+            PermissionRule(permission="bash", pattern="*", action=PermissionAction.ALLOW),
+            PermissionRule(permission="pdf", pattern="*", action=PermissionAction.ALLOW),
+            PermissionRule(permission="task", pattern="*", action=PermissionAction.DENY),
+            PermissionRule(permission="todowrite", pattern="*", action=PermissionAction.DENY),
+            PermissionRule(permission="write", pattern="*", action=PermissionAction.DENY),
+            PermissionRule(permission="edit", pattern="*", action=PermissionAction.DENY),
+        ],
+        prompt="""你是数据分析专家。你的任务是分析文档、研报、数据文件并提取关键信息。
+
+分析策略：
+1. 首先使用 glob 了解文件结构
+2. 使用 pdf 工具读取 PDF 文件
+3. 使用 read 工具读取其他文件
+4. 提取关键信息：日期、主题、评级、推荐标的等
+5. 综合分析并给出结构化报告
+
+输出格式：
+- 使用清晰的标题和列表
+- 按重要性排序信息
+- 给出具体的投资建议和风险提示
+
+请仔细分析并给出专业的结论。""",
+        max_steps=100,
+    )
+
+
 def register_subagents():
     """注册子 Agent"""
     agent_registry.register(create_explore_agent())
     agent_registry.register(create_general_agent())
+    agent_registry.register(create_analyze_agent())

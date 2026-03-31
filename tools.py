@@ -556,7 +556,7 @@ class BashTool(Tool):
 
 
 class TaskTool(Tool):
-    """Dispatch a task to a subagent"""
+    """Dispatch a task to a subagent - placeholder, real implementation in task_tool.py"""
     
     def _init_params(self):
         self._params = [
@@ -567,14 +567,12 @@ class TaskTool(Tool):
         ]
     
     async def execute(self, args: Dict[str, Any], context: ToolContext) -> ToolResult:
-        # 子任务执行 - 在实际实现中会创建新的 Agent 会话
-        # 这里返回一个占位结果
         description = args.get("description", "Task")
         prompt = args.get("prompt", "")
         subagent_type = args.get("subagent_type", "general")
         
         return ToolResult(
-            output=f"[Task dispatched to {subagent_type} subagent]\nDescription: {description}\n\nThis is a placeholder. In full implementation, this would spawn a new agent session.",
+            output=f"[Task dispatched to {subagent_type} subagent]\nDescription: {description}\n\nNote: This is a placeholder. For full functionality, use the TaskTool from task_tool.py",
             title=description,
             metadata={
                 "subagent": subagent_type,

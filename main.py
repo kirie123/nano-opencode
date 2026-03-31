@@ -6,6 +6,8 @@ Nano-OpenCode CLI 入口
     uv run main.py "帮我分析这个项目"
     uv run main.py --agent plan "制定重构计划"
     uv run main.py --provider ollama --model qwen2.5:7b "帮我分析"
+    uv run main.py -i                    # 交互模式
+    uv run main.py -i --provider ollama  # 交互模式 + Ollama
 """
 
 import asyncio
@@ -14,7 +16,6 @@ import os
 import sys
 from typing import Optional
 
-# 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent import AgentConfig, AgentMode, agent_registry
@@ -27,7 +28,24 @@ from message import generate_id
 
 async def main_async(args):
     """异步主函数"""
-    # 配置 LLM
+    llm_config, ollama_config = _create_llm_config(args)
+    _register_default_agents()
+    
+    runner = AgentRunner(
+        workspace=args.workspace,
+        llm_config=llm_config,
+        ollama_config=ollama_config,
+        storage_dir=args.storage
+    )
+    
+    if args.interactive:
+        return await _run_interactive(args, runner)
+    else:
+        return await _run_single(args, runner)
+
+
+def _create_llm_config(args):
+    """创建 LLM 配置"""
     if args.provider == "ollama":
         llm_config = LLMConfig(
             provider="ollama",
@@ -50,62 +68,21 @@ async def main_async(args):
         )
         ollama_config = None
     
-    # 注册默认 Agent
-    _register_default_agents()
+    return llm_config, ollama_config
+
+
+async def _run_single(args, runner):
+    """单次执行模式"""
+    callbacks = _create_callbacks(args)
     
-    # 创建运行器
-    runner = AgentRunner(
-        workspace=args.workspace,
-        llm_config=llm_config,
-        ollama_config=ollama_config,
-        storage_dir=args.storage
-    )
-    
-    # 定义回调
-    output_text = []
-    
-    async def on_text(text: str):
-        """文本输出回调"""
-        print(text, end="", flush=True)
-        output_text.append(text)
-    
-    async def on_reasoning(text: str):
-        """推理输出回调"""
-        if args.verbose:
-            print(f"\n[思考] {text}", end="", flush=True)
-    
-    async def on_tool_start(tool_name: str, arguments: dict):
-        """工具开始回调"""
-        print(f"\n[工具] {tool_name}({arguments})...", flush=True)
-    
-    async def on_tool_end(tool_name: str, result):
-        """工具结束回调"""
-        if result.success:
-            print(f"[工具] {tool_name} 完成. output: {result.output[:10]}", flush=True)
-        else:
-            print(f"[工具] {tool_name} 失败: {result.error}", flush=True)
-    
-    async def on_step(step: int):
-        """步骤回调"""
-        if args.verbose:
-            print(f"\n[步骤 {step}]", flush=True)
-    
-    # 运行
     print(f"[Agent: {args.agent}] {args.prompt}\n", flush=True)
     
     result = await runner.run(
         prompt=args.prompt,
         agent_name=args.agent,
-        callbacks={
-            "on_text": on_text,
-            "on_reasoning": on_reasoning,
-            "on_tool_start": on_tool_start,
-            "on_tool_end": on_tool_end,
-            "on_step": on_step
-        }
+        callbacks=callbacks
     )
     
-    # 输出结果
     print("\n")
     
     if result.error:
@@ -119,6 +96,120 @@ async def main_async(args):
         print(f"[统计] 步数: {result.tool_calls} 次工具调用")
     
     return 0
+
+
+async def _run_interactive(args, runner):
+    """交互模式"""
+    print("=" * 50)
+    print("Nano-OpenCode 交互模式")
+    print(f"Provider: {args.provider}, Model: {args.model}")
+    print("输入 'exit' 或 'quit' 退出")
+    print("=" * 50)
+    print()
+    
+    callbacks = _create_callbacks(args)
+    
+    while True:
+        try:
+            prompt = input(">>> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n再见!")
+            break
+        
+        if not prompt:
+            continue
+        
+        if prompt.lower() in ("exit", "quit", "q"):
+            print("再见!")
+            break
+        
+        if prompt.startswith("/"):
+            await _handle_command(prompt, args, runner)
+            continue
+        
+        print(f"\n[Agent: {args.agent}]\n", flush=True)
+        
+        result = await runner.run(
+            prompt=prompt,
+            agent_name=args.agent,
+            callbacks=callbacks
+        )
+        
+        print("\n")
+        
+        if result.error:
+            print(f"[错误] {result.error}")
+        
+        if result.state == LoopState.STOP:
+            if args.verbose:
+                print(f"[统计] 步数: {result.tool_calls} 次工具调用")
+    
+    return 0
+
+
+async def _handle_command(command: str, args, runner):
+    """处理斜杠命令"""
+    cmd = command.lower().strip()
+    
+    if cmd in ("/help", "/h", "/?"):
+        print("""
+可用命令:
+  /help, /h, /?    显示帮助
+  /clear           清除会话历史
+  /agent <name>    切换 Agent (build, plan, explore, general, analyze)
+  /model <name>    切换模型
+  /exit, /quit     退出程序
+""")
+    elif cmd == "/clear":
+        runner.session = None
+        print("[会话已清除]")
+    elif cmd.startswith("/agent "):
+        agent_name = command[7:].strip()
+        if agent_name in ["build", "plan", "explore", "general", "analyze"]:
+            args.agent = agent_name
+            print(f"[已切换到 Agent: {agent_name}]")
+        else:
+            print(f"[未知 Agent: {agent_name}]")
+    elif cmd.startswith("/model "):
+        model_name = command[7:].strip()
+        args.model = model_name
+        print(f"[已切换到模型: {model_name}]")
+    elif cmd in ("/exit", "/quit"):
+        print("再见!")
+        sys.exit(0)
+    else:
+        print(f"[未知命令: {command}]")
+
+
+def _create_callbacks(args):
+    """创建回调函数"""
+    async def on_text(text: str):
+        print(text, end="", flush=True)
+    
+    async def on_reasoning(text: str):
+        if args.verbose:
+            print(f"\n[思考] {text}", end="", flush=True)
+    
+    async def on_tool_start(tool_name: str, arguments: dict):
+        print(f"\n[工具] {tool_name}({arguments})...", flush=True)
+    
+    async def on_tool_end(tool_name: str, result):
+        if result.success:
+            print(f"[工具] {tool_name} 完成. output: {result.output[:10]}", flush=True)
+        else:
+            print(f"[工具] {tool_name} 失败: {result.error}", flush=True)
+    
+    async def on_step(step: int):
+        if args.verbose:
+            print(f"\n[步骤 {step}]", flush=True)
+    
+    return {
+        "on_text": on_text,
+        "on_reasoning": on_reasoning,
+        "on_tool_start": on_tool_start,
+        "on_tool_end": on_tool_end,
+        "on_step": on_step
+    }
 
 
 def _register_default_agents():
@@ -150,26 +241,42 @@ def _register_default_agents():
     agent_registry.register(plan)
     
     # explore subagent
-    from task_tool import create_explore_agent, create_general_agent
+    from task_tool import create_explore_agent, create_general_agent, create_analyze_agent
     agent_registry.register(create_explore_agent())
     agent_registry.register(create_general_agent())
+    agent_registry.register(create_analyze_agent())
 
 
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="Nano-OpenCode: 简化版 AI 编程助手"
+        description="Nano-OpenCode: 简化版 AI 编程助手",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  uv run main.py "帮我分析这个项目"
+  uv run main.py -i --provider ollama
+  uv run main.py --agent plan "制定重构计划"
+  uv run main.py -p ollama -m qwen2.5:7b "帮我分析"
+"""
     )
     
     parser.add_argument(
         "prompt",
-        help="用户提示"
+        nargs="?",
+        help="用户提示 (交互模式下可选)"
+    )
+    
+    parser.add_argument(
+        "--interactive", "-i",
+        action="store_true",
+        help="启动交互模式"
     )
     
     parser.add_argument(
         "--agent", "-a",
         default="build",
-        choices=["build", "plan", "explore", "general"],
+        choices=["build", "plan", "explore", "general", "analyze"],
         help="使用的 Agent (default: build)"
     )
     
@@ -234,17 +341,17 @@ def main():
     
     args = parser.parse_args()
     
-    # 设置默认模型
+    if not args.interactive and not args.prompt:
+        parser.error("需要提供 prompt 或使用 -i 进入交互模式")
+    
     if args.provider == "ollama" and args.model == "gpt-4o":
         args.model = "glm-4.7-flash"
     
-    # 检查 API Key (Ollama 不需要)
     if args.provider != "ollama":
         if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
             print("错误: 请设置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY 环境变量")
             sys.exit(1)
     
-    # 运行
     sys.exit(asyncio.run(main_async(args)))
 
 
