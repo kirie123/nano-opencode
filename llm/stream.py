@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any, Callable, AsyncGenerator, Union, A
 from enum import Enum
 from abc import ABC, abstractmethod
 
-from message import (
+from core.message import (
     Message, Part, TextPart, ReasoningPart, ToolPart, 
     MessageRole, ToolStatus, generate_id
 )

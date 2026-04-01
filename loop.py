@@ -23,29 +23,29 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from agent import AgentConfig, AgentMode, agent_registry
-from message import (
+from core.agent import AgentConfig, AgentMode, agent_registry
+from core.message import (
     Message, Part, TextPart, ReasoningPart, ToolPart, 
     MessageRole, ToolStatus, generate_id
 )
-from session import Session, SessionManager
-from tools import Tool, ToolRegistry, ToolResult, ToolContext, tool_registry
-from permission import PermissionEvaluator, PermissionAction, PermissionRule
-from llm import LLMClient, LLMConfig, OllamaConfig
-from prompt_manager import SystemPrompt
-from stream import (
+from core.session import Session, SessionManager
+from tools.tools import Tool, ToolRegistry, ToolResult, ToolContext, tool_registry
+from permission.permission import PermissionEvaluator, PermissionAction, PermissionRule
+from llm.llm import LLMClient, LLMConfig, OllamaConfig
+from prompt.prompt_manager import SystemPrompt
+from llm.stream import (
     StreamProcessor, StreamEvent, StreamEventType, 
     StreamResult, MockStreamGenerator
 )
-from error import (
+from error.error import (
     ErrorHandler, RetryConfig, ErrorInfo, ErrorType,
     AgentError, ToolError, ContextOverflowError
 )
-from compaction import (
+from compaction.compaction import (
     CompactionManager, CompactionConfig, CompactionStrategy,
     TokenCounter, CompactionResult
 )
-from task_tool import TaskTool, SubtaskManager, subtask_manager, register_subagents
+from tools.task_tool import TaskTool, SubtaskManager, subtask_manager, register_subagents
 
 
 class LoopState(Enum):

@@ -15,11 +15,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Callable
 from pathlib import Path
 
-from message import Message, MessageRole, generate_id
-from tools import Tool, ToolContext, ToolResult
-from agent import AgentConfig, AgentMode, agent_registry
-from permission import PermissionEvaluator, PermissionAction
-from session import Session, SessionManager
+from core.message import Message, MessageRole, generate_id
+from tools.tools import Tool, ToolContext, ToolResult
+from core.agent import AgentConfig, AgentMode, agent_registry
+from permission.permission import PermissionEvaluator, PermissionAction
+from core.session import Session, SessionManager
 
 
 TASK_TOOL_DESCRIPTION = """

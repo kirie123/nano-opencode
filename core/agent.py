@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Any, Literal
 from enum import Enum
 from pathlib import Path
 
-from permission import PermissionRule, PermissionAction
+from permission.permission import PermissionRule, PermissionAction
 
 
 class AgentMode(Enum):

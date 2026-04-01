@@ -18,12 +18,12 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent import AgentConfig, AgentMode, agent_registry
-from tools import tool_registry
-from permission import PermissionAction, PermissionRule
-from llm import LLMConfig, OllamaConfig
+from core.agent import AgentConfig, AgentMode, agent_registry
+from tools.tools import tool_registry
+from permission.permission import PermissionAction, PermissionRule
+from llm.llm import LLMConfig, OllamaConfig
 from loop import AgentLoop, AgentRunner, LoopState
-from message import generate_id
+from core.message import generate_id
 
 
 async def main_async(args):
@@ -214,7 +214,6 @@ def _create_callbacks(args):
 
 def _register_default_agents():
     """注册默认 Agent"""
-    # build agent
     build = AgentConfig(
         name="build",
         description="默认 Agent，执行所有操作",
@@ -225,7 +224,6 @@ def _register_default_agents():
     )
     agent_registry.register(build)
     
-    # plan agent
     plan = AgentConfig(
         name="plan",
         description="计划模式，只读分析",
@@ -240,8 +238,7 @@ def _register_default_agents():
     )
     agent_registry.register(plan)
     
-    # explore subagent
-    from task_tool import create_explore_agent, create_general_agent, create_analyze_agent
+    from tools.task_tool import create_explore_agent, create_general_agent, create_analyze_agent
     agent_registry.register(create_explore_agent())
     agent_registry.register(create_general_agent())
     agent_registry.register(create_analyze_agent())
@@ -318,7 +315,6 @@ def main():
         help="详细输出"
     )
     
-    # Ollama 特定参数
     parser.add_argument(
         "--ollama-url",
         default="http://localhost:11434",

@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from enum import Enum
 from abc import ABC, abstractmethod
 
-from message import Message, Part, TextPart, ReasoningPart, ToolPart, MessageRole
+from core.message import Message, Part, TextPart, ReasoningPart, ToolPart, MessageRole
 
 
 class CompactionStrategy(Enum):
