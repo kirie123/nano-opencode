@@ -13,12 +13,14 @@ Agent Loop: 核心 Agent 运行循环
 - 错误处理（重试、回退）
 - 智能摘要压缩
 - 子 Agent 调用
+- 缓存感知的 Prompt 构建
+- 缓存安全的上下文压缩
 """
 
 import asyncio
 import json
 import time
-from typing import Dict, List, Optional, Any, Callable, Awaitable, AsyncGenerator
+from typing import Dict, List, Optional, Any, Callable, Awaitable, AsyncGenerator, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -33,6 +35,7 @@ from tools.tools import Tool, ToolRegistry, ToolResult, ToolContext, tool_regist
 from permission.permission import PermissionEvaluator, PermissionAction, PermissionRule
 from llm.llm import LLMClient, LLMConfig, OllamaConfig
 from prompt.prompt_manager import SystemPrompt
+from prompt.cache_aware_prompt import CacheAwarePromptBuilder, SystemPromptBuilder, CacheInfo
 from llm.stream import (
     StreamProcessor, StreamEvent, StreamEventType, 
     StreamResult, MockStreamGenerator
@@ -45,6 +48,7 @@ from compaction.compaction import (
     CompactionManager, CompactionConfig, CompactionStrategy,
     TokenCounter, CompactionResult
 )
+from compaction.cache_safe_compaction import CacheSafeCompactionManager, CacheSafeCompactionResult
 from tools.task_tool import TaskTool, SubtaskManager, subtask_manager, register_subagents
 
 
@@ -74,6 +78,19 @@ class AgentLoopConfig:
     enable_compaction: bool = True
     enable_retry: bool = True
     max_retries: int = 3
+    enable_cache: bool = True
+    cache_dynamic_injection: bool = True
+
+
+@dataclass
+class CacheStats:
+    """缓存统计"""
+    prompt_cache_hits: int = 0
+    prompt_cache_misses: int = 0
+    compaction_cache_hits: int = 0
+    compaction_cache_misses: int = 0
+    tokens_saved_by_cache: int = 0
+    cost_saved_ratio: float = 0.0
 
 
 class AgentLoop:
@@ -92,6 +109,11 @@ class AgentLoop:
            - finish → 检查是否退出
         5. 死循环检测
         6. 压缩检查
+    
+    缓存支持：
+    - 使用 CacheAwarePromptBuilder 构建缓存友好的 System Prompt
+    - 使用 CacheSafeCompactionManager 进行缓存安全的压缩
+    - 动态信息通过消息注入而非修改 System Prompt
     """
     
     def __init__(
@@ -138,6 +160,17 @@ class AgentLoop:
             llm_client=llm_client,
         )
         
+        self.cache_safe_compactor = CacheSafeCompactionManager(
+            llm_client=llm_client,
+            max_tokens=self.config.max_tokens,
+            target_tokens=self.config.target_tokens,
+        )
+        
+        self.prompt_builder: Optional[CacheAwarePromptBuilder] = None
+        self._current_tools: Optional[List[Dict]] = None
+        self._current_system_prompt: Optional[str] = None
+        self.cache_stats = CacheStats()
+        
         self.subtask_manager = subtask_manager
         
         self.on_text: Optional[Callable[[str], Awaitable[None]]] = None
@@ -147,6 +180,7 @@ class AgentLoop:
         self.on_step: Optional[Callable[[int], Awaitable[None]]] = None
         self.on_error_event: Optional[Callable[[ErrorInfo], Awaitable[None]]] = None
         self.on_compaction: Optional[Callable[[CompactionResult], Awaitable[None]]] = None
+        self.on_cache_hit: Optional[Callable[[str, int], Awaitable[None]]] = None
     
     async def run(self, user_message: str = None) -> LoopResult:
         """运行 Agent 循环"""
@@ -379,6 +413,22 @@ class AgentLoop:
         """构建 LLM 消息格式"""
         messages = []
         
+        if self.config.enable_cache and self.config.cache_dynamic_injection:
+            time_injection = SystemPromptBuilder.build_dynamic_time_message()
+            if self.step > 1:
+                step_injection = CacheAwarePromptBuilder.create_step_reminder(
+                    self.step, self.config.max_steps
+                )
+                messages.append({
+                    "role": "user",
+                    "content": f"{time_injection}\n\n{step_injection}",
+                })
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": time_injection,
+                })
+        
         for msg in history:
             if msg.role == MessageRole.USER:
                 content = msg.get_text_content()
@@ -428,14 +478,49 @@ class AgentLoop:
         return messages
     
     def _build_system_prompt(self, tools: List[Dict[str, Any]]) -> str:
-        """构建系统提示"""
-        return SystemPrompt.build(
-            model=self.llm.config.model if self.llm else "unknown",
-            workspace=self.workspace,
-            agent=self.agent,
-            tools=tools,
-            custom_prompt=self.agent.get_prompt(),
+        """构建系统提示（缓存感知）"""
+        if not self.config.enable_cache:
+            return SystemPrompt.build(
+                model=self.llm.config.model if self.llm else "unknown",
+                workspace=self.workspace,
+                agent=self.agent,
+                tools=tools,
+                custom_prompt=self.agent.get_prompt(),
+            )
+        
+        if self.prompt_builder is None:
+            self.prompt_builder, system_prompt = SystemPromptBuilder.build_cache_aware(
+                model=self.llm.config.model if self.llm else "unknown",
+                workspace=self.workspace,
+                agent=self.agent,
+                tools=tools,
+                custom_prompt=self.agent.get_prompt(),
+            )
+            self._current_system_prompt = system_prompt
+            self._current_tools = tools
+            self.cache_stats.prompt_cache_misses += 1
+        else:
+            self.prompt_builder.clear_dynamic()
+            
+            if self.agent.prompt:
+                self.prompt_builder.add_dynamic(self.agent.prompt, order=0, name="agent_prompt")
+            
+            self._current_system_prompt = self.prompt_builder.build(tools)
+            self._current_tools = tools
+            
+            cache_info = self.prompt_builder.get_cache_info()
+            if cache_info.cache_eligible:
+                self.cache_stats.prompt_cache_hits += 1
+                if self.on_cache_hit:
+                    import asyncio
+                    asyncio.create_task(self.on_cache_hit("prompt", cache_info.static_tokens))
+        
+        self.cache_safe_compactor.save_request_context(
+            self._current_system_prompt,
+            self._current_tools,
         )
+        
+        return self._current_system_prompt
     
     def _convert_llm_event(self, event: Any) -> StreamEvent:
         """转换 LLM 事件为流事件"""
@@ -607,16 +692,34 @@ class AgentLoop:
         return tokens > self.config.max_tokens * 0.9
     
     async def _compact_history(self):
-        """压缩历史"""
-        compacted, result = await self.compaction_manager.auto_compact_if_needed(
-            self.session.messages
-        )
-        
-        if result and self.on_compaction:
-            await self.on_compaction(result)
-        
-        if compacted:
-            self.session.messages = compacted
+        """压缩历史（缓存安全）"""
+        if self.config.enable_cache:
+            compacted, result = await self.cache_safe_compactor.compact_if_needed(
+                self.session.messages
+            )
+            
+            if result:
+                if result.cache_safe and result.cache_hit:
+                    self.cache_stats.compaction_cache_hits += 1
+                    self.cache_stats.tokens_saved_by_cache += result.tokens_saved
+                else:
+                    self.cache_stats.compaction_cache_misses += 1
+                
+                if self.on_compaction:
+                    await self.on_compaction(result)
+                
+                if compacted:
+                    self.session.messages = compacted
+        else:
+            compacted, result = await self.compaction_manager.auto_compact_if_needed(
+                self.session.messages
+            )
+            
+            if result and self.on_compaction:
+                await self.on_compaction(result)
+            
+            if compacted:
+                self.session.messages = compacted
     
     async def _on_stream_event(self, event: StreamEvent):
         """流事件回调"""
@@ -640,6 +743,25 @@ class AgentLoop:
     def cancel(self):
         """取消循环"""
         self.abort = True
+    
+    def get_cache_stats(self) -> CacheStats:
+        """获取缓存统计信息"""
+        return self.cache_stats
+    
+    def get_cache_info(self) -> Dict[str, Any]:
+        """获取缓存详细信息"""
+        return {
+            "prompt_builder": self.prompt_builder.get_cache_info() if self.prompt_builder else None,
+            "current_tools_count": len(self._current_tools) if self._current_tools else 0,
+            "cache_stats": {
+                "prompt_cache_hits": self.cache_stats.prompt_cache_hits,
+                "prompt_cache_misses": self.cache_stats.prompt_cache_misses,
+                "compaction_cache_hits": self.cache_stats.compaction_cache_hits,
+                "compaction_cache_misses": self.cache_stats.compaction_cache_misses,
+                "tokens_saved_by_cache": self.cache_stats.tokens_saved_by_cache,
+            },
+            "compaction_stats": self.cache_safe_compactor.get_stats(),
+        }
 
 
 class AgentRunner:
@@ -650,13 +772,15 @@ class AgentRunner:
         workspace: str = None,
         llm_config: LLMConfig = None,
         ollama_config: "OllamaConfig" = None,
-        storage_dir: str = None
+        storage_dir: str = None,
+        enable_cache: bool = True,
     ):
         self.workspace = workspace or "."
         self.llm_config = llm_config or LLMConfig()
         self.ollama_config = ollama_config
         self.storage_dir = storage_dir
         self.session_manager = SessionManager(storage_dir)
+        self.enable_cache = enable_cache
         
         register_subagents()
     
@@ -665,8 +789,9 @@ class AgentRunner:
         prompt: str,
         agent_name: str = "build",
         session_id: str = None,
-        callbacks: Dict[str, Callable] = None
-    ) -> LoopResult:
+        callbacks: Dict[str, Callable] = None,
+        loop_config: AgentLoopConfig = None,
+    ) -> Tuple[LoopResult, Dict[str, Any]]:
         """运行 Agent"""
         session = None
         if session_id:
@@ -682,12 +807,18 @@ class AgentRunner:
         if not agent:
             raise ValueError(f"Agent not found: {agent_name}")
         
+        if loop_config is None:
+            loop_config = AgentLoopConfig(enable_cache=self.enable_cache)
+        else:
+            loop_config.enable_cache = self.enable_cache
+        
         async with LLMClient(self.llm_config, self.ollama_config) as llm_client:
             loop = AgentLoop(
                 agent=agent,
                 llm_client=llm_client,
                 workspace=self.workspace,
                 session=session,
+                config=loop_config,
             )
             
             if callbacks:
@@ -698,7 +829,10 @@ class AgentRunner:
                 loop.on_step = callbacks.get("on_step")
                 loop.on_error_event = callbacks.get("on_error")
                 loop.on_compaction = callbacks.get("on_compaction")
+                loop.on_cache_hit = callbacks.get("on_cache_hit")
             
             result = await loop.run(prompt)
+            
+            cache_info = loop.get_cache_info()
         
-        return result
+        return result, cache_info

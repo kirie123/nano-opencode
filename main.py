@@ -77,7 +77,7 @@ async def _run_single(args, runner):
     
     print(f"[Agent: {args.agent}] {args.prompt}\n", flush=True)
     
-    result = await runner.run(
+    result, cache_info = await runner.run(
         prompt=args.prompt,
         agent_name=args.agent,
         callbacks=callbacks
@@ -94,6 +94,9 @@ async def _run_single(args, runner):
     
     if args.verbose:
         print(f"[统计] 步数: {result.tool_calls} 次工具调用")
+        if cache_info:
+            stats = cache_info.get("cache_stats", {})
+            print(f"[缓存] Prompt命中: {stats.get('prompt_cache_hits', 0)}, 压缩命中: {stats.get('compaction_cache_hits', 0)}")
     
     return 0
 
@@ -129,7 +132,7 @@ async def _run_interactive(args, runner):
         
         print(f"\n[Agent: {args.agent}]\n", flush=True)
         
-        result = await runner.run(
+        result, cache_info = await runner.run(
             prompt=prompt,
             agent_name=args.agent,
             callbacks=callbacks
@@ -143,6 +146,9 @@ async def _run_interactive(args, runner):
         if result.state == LoopState.STOP:
             if args.verbose:
                 print(f"[统计] 步数: {result.tool_calls} 次工具调用")
+                if cache_info:
+                    stats = cache_info.get("cache_stats", {})
+                    print(f"[缓存] Prompt命中: {stats.get('prompt_cache_hits', 0)}, 压缩命中: {stats.get('compaction_cache_hits', 0)}")
     
     return 0
 
